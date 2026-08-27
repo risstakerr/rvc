@@ -1,0 +1,14 @@
+{
+  "name": "private-video-call",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["frontend", "backend", "shared"],
+  "scripts": {
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "npm --prefix backend run dev",
+    "build:frontend": "npm --prefix frontend run build",
+    "build:backend": "npm --prefix backend run build",
+    "typecheck": "npm --prefix shared run typecheck && npm --prefix backend run typecheck && (cd frontend && npx tsc -p tsconfig.app.json --noEmit)",
+    "lint:backend": "npm --prefix backend run lint"
+  }
+}
