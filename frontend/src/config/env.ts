@@ -2,14 +2,20 @@
  * Configuración de entorno del frontend. Vite expone únicamente las
  * variables prefijadas con VITE_ en import.meta.env.
  */
-export const API_BASE_URL: string =
-  import.meta.env["VITE_API_BASE_URL"] ?? "http://localhost:8787";
+function getApiBaseUrl(): string {
+  const raw = import.meta.env["VITE_API_BASE_URL"];
+  if (!raw) {
+    if (import.meta.env.PROD) throw new Error("VITE_API_BASE_URL es obligatoria en producción.");
+    return "http://localhost:8787";
+  }
+  try {
+    const url = new URL(raw);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error();
+    if (import.meta.env.PROD && url.protocol !== "https:") throw new Error();
+    return url.origin;
+  } catch {
+    throw new Error("VITE_API_BASE_URL debe ser una URL HTTP(S) válida; en producción debe usar HTTPS.");
+  }
+}
 
-/**
- * URL base del WebSocket de signaling (Fase 5/6). Se deriva de
- * `API_BASE_URL` en vez de pedir una variable de entorno aparte: el
- * signaling comparte proceso y puerto con la API REST (ver
- * `backend/src/index.ts`), así que siempre es el mismo host con
- * protocolo `ws`/`wss` en vez de `http`/`https`.
- */
-export const WS_BASE_URL: string = API_BASE_URL.replace(/^http/, "ws");
+export const API_BASE_URL = getApiBaseUrl();

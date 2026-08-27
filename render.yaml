@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: private-video-call-api
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run build:backend
+    startCommand: npm --prefix backend run start
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 25
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: true
+      - key: CORS_ORIGIN
+        sync: false
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: LIVEKIT_TOKEN_TTL_SECONDS
+        value: 900
+      - key: RECORDING_ENABLED
+        value: false

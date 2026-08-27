@@ -14,15 +14,29 @@ export interface LocalMediaError {
   message: string;
 }
 
-interface UseLocalMediaResult {
+export interface MediaDeviceOption {
+  deviceId: string;
+  label: string;
+}
+
+export interface UseLocalMediaResult {
   status: LocalMediaStatus;
   stream: MediaStream | null;
   error: LocalMediaError | null;
   micEnabled: boolean;
   camEnabled: boolean;
-  request: () => Promise<void>;
+  audioInputs: MediaDeviceOption[];
+  videoInputs: MediaDeviceOption[];
+  selectedAudioInputId: string;
+  selectedVideoInputId: string;
+  request: () => Promise<MediaStreamTrack[]>;
+  restoreAfterBackground: () => Promise<MediaStreamTrack[]>;
+  release: () => void;
   toggleMic: () => void;
   toggleCam: () => void;
+  setMicEnabled: (enabled: boolean) => void;
+  setCamEnabled: (enabled: boolean) => void;
+  changeDevice: (kind: "audioinput" | "videoinput", deviceId: string) => Promise<MediaStreamTrack | null>;
 }
 
 /**
@@ -82,8 +96,12 @@ export function useLocalMedia(): UseLocalMediaResult {
   const [status, setStatus] = useState<LocalMediaStatus>("idle");
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [error, setError] = useState<LocalMediaError | null>(null);
-  const [micEnabled, setMicEnabled] = useState(true);
-  const [camEnabled, setCamEnabled] = useState(true);
+  const [micEnabled, setMicEnabledState] = useState(true);
+  const [camEnabled, setCamEnabledState] = useState(true);
+  const [audioInputs, setAudioInputs] = useState<MediaDeviceOption[]>([]);
+  const [videoInputs, setVideoInputs] = useState<MediaDeviceOption[]>([]);
+  const [selectedAudioInputId, setSelectedAudioInputId] = useState("");
+  const [selectedVideoInputId, setSelectedVideoInputId] = useState("");
   const streamRef = useRef<MediaStream | null>(null);
 
   const stopCurrentStream = useCallback(() => {
@@ -91,14 +109,34 @@ export function useLocalMedia(): UseLocalMediaResult {
     streamRef.current = null;
   }, []);
 
-  const request = useCallback(async () => {
+  const release = useCallback(() => {
+    stopCurrentStream();
+    setStream(null);
+    setMicEnabledState(false);
+    setCamEnabledState(false);
+    setStatus("idle");
+    setError(null);
+  }, [stopCurrentStream]);
+
+  const refreshDevices = useCallback(async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const toOption = (device: MediaDeviceInfo, index: number): MediaDeviceOption => ({
+      deviceId: device.deviceId,
+      label: device.label || `${device.kind === "audioinput" ? "Micrófono" : "Cámara"} ${index + 1}`,
+    });
+    setAudioInputs(devices.filter((device) => device.kind === "audioinput").map(toOption));
+    setVideoInputs(devices.filter((device) => device.kind === "videoinput").map(toOption));
+  }, []);
+
+  const request = useCallback(async (): Promise<MediaStreamTrack[]> => {
     if (!navigator.mediaDevices?.getUserMedia) {
       setStatus("error");
       setError({
         type: "unsupported",
         message: "Este navegador no soporta acceso a cámara y micrófono.",
       });
-      return;
+      return [];
     }
 
     stopCurrentStream();
@@ -107,20 +145,62 @@ export function useLocalMedia(): UseLocalMediaResult {
 
     try {
       const nextStream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
+        video: selectedVideoInputId ? { deviceId: { exact: selectedVideoInputId } } : true,
+        audio: selectedAudioInputId ? { deviceId: { exact: selectedAudioInputId } } : true,
       });
       streamRef.current = nextStream;
       setStream(nextStream);
-      setMicEnabled(true);
-      setCamEnabled(true);
+      setSelectedAudioInputId(nextStream.getAudioTracks()[0]?.getSettings().deviceId ?? "");
+      setSelectedVideoInputId(nextStream.getVideoTracks()[0]?.getSettings().deviceId ?? "");
+      await refreshDevices();
+      setMicEnabledState(true);
+      setCamEnabledState(true);
       setStatus("ready");
+      return nextStream.getTracks();
     } catch (err) {
       setStream(null);
       setStatus("error");
       setError(mapError(err));
+      return [];
     }
-  }, [stopCurrentStream]);
+  }, [refreshDevices, selectedAudioInputId, selectedVideoInputId, stopCurrentStream]);
+
+  /**
+   * Algunos SO móviles finalizan los tracks al poner el navegador en segundo
+   * plano. Al volver, se capturan tracks nuevos dentro del mismo MediaStream:
+   * así la vista local no fuerza una reconexión de LiveKit y el llamador puede
+   * reemplazar las publicaciones existentes.
+   */
+  const restoreAfterBackground = useCallback(async (): Promise<MediaStreamTrack[]> => {
+    const currentStream = streamRef.current;
+    if (!currentStream || !navigator.mediaDevices?.getUserMedia) return request();
+
+    try {
+      const replacementStream = await navigator.mediaDevices.getUserMedia({
+        video: selectedVideoInputId ? { deviceId: { exact: selectedVideoInputId } } : true,
+        audio: selectedAudioInputId ? { deviceId: { exact: selectedAudioInputId } } : true,
+      });
+      const replacements = replacementStream.getTracks();
+      for (const replacement of replacements) {
+        const enabled = replacement.kind === "audio" ? micEnabled : camEnabled;
+        replacement.enabled = enabled;
+        currentStream.getTracks().filter((track) => track.kind === replacement.kind).forEach((track) => {
+          currentStream.removeTrack(track);
+          track.stop();
+        });
+        currentStream.addTrack(replacement);
+      }
+      setSelectedAudioInputId(replacementStream.getAudioTracks()[0]?.getSettings().deviceId ?? selectedAudioInputId);
+      setSelectedVideoInputId(replacementStream.getVideoTracks()[0]?.getSettings().deviceId ?? selectedVideoInputId);
+      await refreshDevices();
+      setError(null);
+      setStatus("ready");
+      return replacements;
+    } catch (err) {
+      setError(mapError(err));
+      return [];
+    }
+  }, [camEnabled, micEnabled, refreshDevices, request, selectedAudioInputId, selectedVideoInputId]);
 
   useEffect(() => {
     return () => {
@@ -128,25 +208,82 @@ export function useLocalMedia(): UseLocalMediaResult {
     };
   }, [stopCurrentStream]);
 
-  const toggleMic = useCallback(() => {
-    setMicEnabled((prev) => {
-      const next = !prev;
-      streamRef.current?.getAudioTracks().forEach((track) => {
-        track.enabled = next;
-      });
-      return next;
+  useEffect(() => {
+    const onDeviceChange = () => void refreshDevices();
+    navigator.mediaDevices?.addEventListener?.("devicechange", onDeviceChange);
+    return () => navigator.mediaDevices?.removeEventListener?.("devicechange", onDeviceChange);
+  }, [refreshDevices]);
+
+  const setMicEnabled = useCallback((enabled: boolean) => {
+    streamRef.current?.getAudioTracks().forEach((track) => {
+      track.enabled = enabled;
     });
+    setMicEnabledState(enabled);
   }, []);
 
-  const toggleCam = useCallback(() => {
-    setCamEnabled((prev) => {
-      const next = !prev;
-      streamRef.current?.getVideoTracks().forEach((track) => {
-        track.enabled = next;
-      });
-      return next;
+  const setCamEnabled = useCallback((enabled: boolean) => {
+    streamRef.current?.getVideoTracks().forEach((track) => {
+      track.enabled = enabled;
     });
+    setCamEnabledState(enabled);
   }, []);
 
-  return { status, stream, error, micEnabled, camEnabled, request, toggleMic, toggleCam };
+  const toggleMic = useCallback(() => setMicEnabled(!micEnabled), [micEnabled, setMicEnabled]);
+
+  const toggleCam = useCallback(() => setCamEnabled(!camEnabled), [camEnabled, setCamEnabled]);
+
+  const changeDevice = useCallback(
+    async (kind: "audioinput" | "videoinput", deviceId: string): Promise<MediaStreamTrack | null> => {
+      const currentStream = streamRef.current;
+      if (!currentStream || !navigator.mediaDevices?.getUserMedia) return null;
+
+      const mediaKind = kind === "audioinput" ? "audio" : "video";
+      const wasEnabled = mediaKind === "audio" ? micEnabled : camEnabled;
+
+      try {
+        const replacementStream = await navigator.mediaDevices.getUserMedia({
+          audio: kind === "audioinput" ? { deviceId: { exact: deviceId } } : false,
+          video: kind === "videoinput" ? { deviceId: { exact: deviceId } } : false,
+        });
+        const replacementTrack = replacementStream.getTracks()[0];
+        if (!replacementTrack) throw new Error("No se pudo abrir el dispositivo seleccionado.");
+
+        replacementTrack.enabled = wasEnabled;
+        currentStream.getTracks().filter((track) => track.kind === mediaKind).forEach((track) => {
+          currentStream.removeTrack(track);
+          track.stop();
+        });
+        currentStream.addTrack(replacementTrack);
+
+        if (kind === "audioinput") setSelectedAudioInputId(deviceId);
+        else setSelectedVideoInputId(deviceId);
+        setError(null);
+        return replacementTrack;
+      } catch (err) {
+        setError(mapError(err));
+        return null;
+      }
+    },
+    [camEnabled, micEnabled],
+  );
+
+  return {
+    status,
+    stream,
+    error,
+    micEnabled,
+    camEnabled,
+    audioInputs,
+    videoInputs,
+    selectedAudioInputId,
+    selectedVideoInputId,
+    request,
+    restoreAfterBackground,
+    release,
+    toggleMic,
+    toggleCam,
+    setMicEnabled,
+    setCamEnabled,
+    changeDevice,
+  };
 }

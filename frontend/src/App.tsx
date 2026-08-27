@@ -3,7 +3,7 @@ import { isValidRoomId } from "@pvc/shared";
 import { API_BASE_URL } from "./config/env";
 import type { View } from "./types/view";
 import { useLocalMedia } from "./hooks/useLocalMedia";
-import { useCallConnection } from "./hooks/useCallConnection";
+import { useLiveKitConnection } from "./hooks/useLiveKitConnection";
 import { checkRoomExists, createRoom } from "./api/rooms";
 import { buildCallUrl, navigateHome, navigateToCall, parseRoomIdFromPath } from "./lib/router";
 import { HomeScreen } from "./screens/HomeScreen";
@@ -24,13 +24,36 @@ function App() {
   const [createRoomError, setCreateRoomError] = useState<string | null>(null);
   const media = useLocalMedia();
 
-  // El signaling WebSocket + WebRTC (Fase 6) solo debe conectarse
-  // mientras la vista activa es "call": ni antes (en "room-share",
+  // LiveKit solo se conecta mientras la vista activa es "call": ni
+  // antes (en "room-share",
   // esperando a que el usuario elija "Entrar") ni después de salir.
   // Pasar `null` cuando no corresponde hace que el hook limpie la
   // conexión anterior solo, por el cambio de dependencia.
   const activeCallRoomId = view === "call" ? roomId : null;
-  const call = useCallConnection(activeCallRoomId, media.stream);
+  const liveKit = useLiveKitConnection(activeCallRoomId, media.stream);
+
+  const connectionState = (() => {
+    switch (liveKit.state) {
+      case "connecting":
+        return "CONNECTING" as const;
+      case "connected":
+      case "reconnected":
+        return "CONNECTED" as const;
+      case "reconnecting":
+        return "RECONNECTING" as const;
+      case "disconnected":
+      case "failed":
+      case "unsupported":
+        return "DISCONNECTED" as const;
+      case "idle":
+        return "IDLE" as const;
+    }
+  })();
+
+  const localMediaStatus =
+    liveKit.publishedTrackKinds.includes("audio") && liveKit.publishedTrackKinds.includes("video")
+      ? "Cámara y micrófono publicados"
+      : liveKit.error?.message ?? null;
 
   // Recuerda en qué pantalla estábamos antes de un error de cámara,
   // para volver ahí (y no siempre a Home) cuando el permiso se recupera.
@@ -56,6 +79,59 @@ function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (liveKit.errorCode === "ROOM_FULL") {
+      setView("room-full");
+    }
+  }, [liveKit.errorCode]);
+
+  // Al volver de otra app, Android/iOS pueden haber suspendido o terminado
+  // getUserMedia. Se recuperan tracks nuevos y se sustituyen en LiveKit sin
+  // salir de la sala. Mientras la app sigue en segundo plano, el navegador o
+  // sistema operativo conserva la última palabra sobre la captura.
+  useEffect(() => {
+    let wasHidden = false;
+    let recovering = false;
+    let disposed = false;
+
+    const restoreMedia = async () => {
+      if (recovering || view !== "call") return;
+      recovering = true;
+      try {
+        const tracks = await media.restoreAfterBackground();
+        if (disposed) {
+          tracks.forEach((track) => track.stop());
+          return;
+        }
+        await Promise.all(
+          tracks.map((track) => {
+            if (track.kind !== "audio" && track.kind !== "video") return Promise.resolve();
+            return liveKit.replaceTrack(track.kind, track);
+          }),
+        );
+      } finally {
+        recovering = false;
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        wasHidden = true;
+      } else if (wasHidden) {
+        wasHidden = false;
+        void restoreMedia();
+      }
+    };
+    const onPageShow = () => void restoreMedia();
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pageshow", onPageShow);
+    return () => {
+      disposed = true;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pageshow", onPageShow);
+    };
+  }, [liveKit.replaceTrack, media.restoreAfterBackground, view]);
 
   // Pedir cámara/mic apenas entra a la app, tanto si viene a crear
   // una sala como si abrió un enlace /call/:roomId compartido.
@@ -113,18 +189,6 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // El WebSocket de signaling puede rechazar el join recién en ese
-  // momento (la sala pudo llenarse o expirar entre el chequeo REST y
-  // la conexión real). Reaccionar acá, no dentro del hook, porque
-  // solo App.tsx controla las transiciones de vista.
-  useEffect(() => {
-    if (call.error === "room-full") {
-      setView("room-full");
-    } else if (call.error === "room-not-found") {
-      setView("room-not-found");
-    }
-  }, [call.error]);
-
   const handleCreateRoom = useCallback(async () => {
     setIsCreatingRoom(true);
     setCreateRoomError(null);
@@ -146,6 +210,38 @@ function App() {
     setView("home");
   }, []);
 
+  const handleEndCall = useCallback(() => {
+    media.release();
+    handleReturnHome();
+  }, [handleReturnHome, media]);
+
+  const handleToggleMic = useCallback(() => {
+    const enabled = !media.micEnabled;
+    media.setMicEnabled(enabled);
+    void liveKit.setTrackEnabled("audio", enabled).catch(() => media.setMicEnabled(!enabled));
+  }, [liveKit, media]);
+
+  const handleToggleCam = useCallback(() => {
+    const enabled = !media.camEnabled;
+    media.setCamEnabled(enabled);
+    void liveKit.setTrackEnabled("video", enabled).catch(() => media.setCamEnabled(!enabled));
+  }, [liveKit, media]);
+
+  const handleChangeDevice = useCallback(
+    (kind: "audioinput" | "videoinput", deviceId: string) => {
+      void (async () => {
+        const replacementTrack = await media.changeDevice(kind, deviceId);
+        if (!replacementTrack) return;
+        await liveKit.replaceTrack(kind === "audioinput" ? "audio" : "video", replacementTrack);
+      })();
+    },
+    [liveKit, media],
+  );
+
+  const handleToggleScreenShare = useCallback(() => {
+    void liveKit.setScreenShareEnabled(!liveKit.screenShareStream);
+  }, [liveKit]);
+
   return (
     <div className="app-shell">
       {backendStatus !== "online" && (
@@ -160,9 +256,10 @@ function App() {
           stream={media.stream}
           micEnabled={media.micEnabled}
           camEnabled={media.camEnabled}
-          onToggleMic={media.toggleMic}
-          onToggleCam={media.toggleCam}
+          onToggleMic={handleToggleMic}
+          onToggleCam={handleToggleCam}
           onCreateRoom={() => void handleCreateRoom()}
+          onRequestMedia={() => void media.request()}
           isCreatingRoom={isCreatingRoom}
           createRoomError={createRoomError}
         />
@@ -176,20 +273,36 @@ function App() {
 
       {view === "room-not-found" && <RoomNotFoundScreen onCreateNew={handleReturnHome} />}
 
+      {view === "room-full" && <RoomFullScreen onCreateNew={handleReturnHome} />}
+
       {view === "call" && (
         <VideoCallScreen
           stream={media.stream}
-          remoteStream={call.remoteStream}
-          connectionState={call.connectionState}
+          participants={liveKit.participants}
+          connectionState={connectionState}
+          localMediaStatus={localMediaStatus}
           micEnabled={media.micEnabled}
           camEnabled={media.camEnabled}
-          onToggleMic={media.toggleMic}
-          onToggleCam={media.toggleCam}
-          onEnd={handleReturnHome}
+          onToggleMic={handleToggleMic}
+          onToggleCam={handleToggleCam}
+          audioInputs={media.audioInputs}
+          videoInputs={media.videoInputs}
+          selectedAudioInputId={media.selectedAudioInputId}
+          selectedVideoInputId={media.selectedVideoInputId}
+          onChangeDevice={handleChangeDevice}
+          deviceError={media.error?.message ?? null}
+          screenShareStream={liveKit.screenShareStream}
+          screenShareError={liveKit.screenShareError}
+          onToggleScreenShare={handleToggleScreenShare}
+          recordingStatus={liveKit.recordingStatus}
+          recordingError={liveKit.recordingError}
+          onToggleRecording={liveKit.toggleRecording}
+          chatMessages={liveKit.chatMessages}
+          chatError={liveKit.chatError}
+          onSendChatMessage={liveKit.sendChatMessage}
+          onEnd={handleEndCall}
         />
       )}
-
-      {view === "room-full" && <RoomFullScreen onCreateNew={handleReturnHome} />}
 
       {view === "camera-error" && (
         <CameraErrorScreen

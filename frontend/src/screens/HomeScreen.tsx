@@ -1,5 +1,6 @@
 import type { LocalMediaStatus } from "../hooks/useLocalMedia";
 import { VideoPreview } from "../components/VideoPreview";
+import { Icon } from "../components/Icon";
 
 interface HomeScreenProps {
   mediaStatus: LocalMediaStatus;
@@ -9,6 +10,7 @@ interface HomeScreenProps {
   onToggleMic: () => void;
   onToggleCam: () => void;
   onCreateRoom: () => void;
+  onRequestMedia: () => void;
   isCreatingRoom: boolean;
   createRoomError: string | null;
 }
@@ -30,6 +32,7 @@ export function HomeScreen({
   onToggleMic,
   onToggleCam,
   onCreateRoom,
+  onRequestMedia,
   isCreatingRoom,
   createRoomError,
 }: HomeScreenProps) {
@@ -37,8 +40,10 @@ export function HomeScreen({
 
   return (
     <div className="screen screen--center">
+      <div className="brand-mark" aria-hidden="true"><Icon name="video" size={28} /></div>
       <div className="home-hero">
-        <h1 className="home-hero__title">Crear una videollamada</h1>
+        <p className="eyebrow">Conexiones privadas</p>
+        <h1 className="home-hero__title">Tu sala, en un solo enlace.</h1>
         <p className="home-hero__subtitle">
           Video llamadas 1 a 1, privadas, sin registro. Creá una sala y compartí el enlace.
         </p>
@@ -53,7 +58,9 @@ export function HomeScreen({
               <span className="call-stage__placeholder">Cámara apagada</span>
             )
           ) : (
-            <span className="call-stage__placeholder">Solicitando acceso a tu cámara…</span>
+            <span className="call-stage__placeholder">
+              {mediaStatus === "idle" ? "Cámara y micrófono inactivos" : "Solicitando acceso a tu cámara…"}
+            </span>
           )}
         </div>
 
@@ -66,7 +73,7 @@ export function HomeScreen({
               aria-label={micEnabled ? "Silenciar micrófono" : "Activar micrófono"}
               onClick={onToggleMic}
             >
-              {micEnabled ? "🎙️" : "🔇"}
+              <Icon name={micEnabled ? "mic" : "mic-off"} />
             </button>
             <button
               type="button"
@@ -75,20 +82,26 @@ export function HomeScreen({
               aria-label={camEnabled ? "Apagar cámara" : "Encender cámara"}
               onClick={onToggleCam}
             >
-              {camEnabled ? "📷" : "🚫"}
+              <Icon name={camEnabled ? "camera" : "camera-off"} />
             </button>
           </div>
         )}
       </div>
 
-      <button
-        type="button"
-        className="btn btn--primary btn--lg"
-        onClick={onCreateRoom}
-        disabled={!isReady || isCreatingRoom}
-      >
-        {!isReady ? "Preparando cámara…" : isCreatingRoom ? "Creando sala…" : "Crear llamada"}
-      </button>
+      {mediaStatus === "idle" ? (
+        <button type="button" className="btn btn--primary btn--lg" onClick={onRequestMedia}>
+          Activar cámara y micrófono
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="btn btn--primary btn--lg"
+          onClick={onCreateRoom}
+          disabled={!isReady || isCreatingRoom}
+        >
+          {!isReady ? "Preparando cámara…" : isCreatingRoom ? "Creando sala…" : "Crear llamada"}
+        </button>
+      )}
 
       {createRoomError ? (
         <p className="home-hint home-hint--error" role="alert">

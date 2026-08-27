@@ -1,21 +1,17 @@
+import { MAX_ROOM_PARTICIPANTS } from "@pvc/shared";
+import { Icon } from "../components/Icon";
+
 interface RoomFullScreenProps {
   onCreateNew: () => void;
 }
 
-/**
- * La sala existe pero ya tiene 2 participantes conectados por
- * WebSocket cuando intentamos unirnos (backend de la Fase 5, mensaje
- * `room-full`). Distinta de "room-not-found": acá la sala es válida,
- * simplemente ya está completa. Mensaje literal pedido en el prompt.
- */
+/** Rechazo controlado cuando el backend informa que la sala llegó a su capacidad. */
 export function RoomFullScreen({ onCreateNew }: RoomFullScreenProps) {
   return (
     <div className="screen screen--center">
-      <span className="camera-error__icon" aria-hidden="true">
-        🚫
-      </span>
-      <h2 className="camera-error__title">Esta llamada ya está completa.</h2>
-      <p className="home-hint">Esta sala privada ya tiene dos personas conectadas.</p>
+      <span className="feedback-icon feedback-icon--warning" aria-hidden="true"><Icon name="users" size={30} /></span>
+      <h2 className="camera-error__title">Esta sala está completa</h2>
+      <p className="home-hint">La llamada admite hasta {MAX_ROOM_PARTICIPANTS} participantes simultáneos.</p>
       <button type="button" className="btn btn--primary btn--lg" onClick={onCreateNew}>
         Crear una nueva llamada
       </button>

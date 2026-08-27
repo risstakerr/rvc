@@ -11,10 +11,8 @@
  * - "checking-room": validando contra el backend un roomId que llegó
  *   por URL (enlace compartido abierto directamente).
  * - "room-not-found": el roomId de la URL no existe o expiró.
- * - "call": videollamada con WebRTC P2P real (Fase 6).
- * - "room-full": la sala ya tenía 2 participantes cuando el
- *   WebSocket intentó unirse (Fase 6: solo se descubre en el momento
- *   del `join` de signaling, distinto de "room-not-found").
+ * - "room-full": LiveKit rechazó el acceso porque se alcanzó el límite.
+ * - "call": videollamada conectada a una sala LiveKit.
  * - "camera-error": fallo de permisos/dispositivo de cámara o mic.
  */
 export const VIEWS = [
@@ -22,8 +20,9 @@ export const VIEWS = [
   "room-share",
   "checking-room",
   "room-not-found",
-  "call",
   "room-full",
+  "nickname",
+  "call",
   "camera-error",
 ] as const;
 

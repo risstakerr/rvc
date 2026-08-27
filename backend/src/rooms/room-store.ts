@@ -12,13 +12,12 @@ export interface Room {
  * pierden, lo cual es aceptable porque no se necesita persistencia
  * (no se guardan videollamadas ni mensajes).
  *
- * NOTA: todavía no hay tracking de participantes (eso es la Fase 5,
- * WebSocket signaling). Por ahora una sala "existe" simplemente si
- * fue creada y no expiró por inactividad.
+ * El conteo y el ciclo de vida de participantes se obtienen de
+ * LiveKit; el backend solo conserva la autorización de la sala.
  */
 const rooms = new Map<string, Room>();
 
-/** Tiempo máximo que una sala vive sin que nadie confirme participación por WebSocket (Fase 5). */
+/** Tiempo máximo que una sala creada vive sin actividad. */
 const ROOM_TTL_MS = 6 * 60 * 60 * 1000; // 6 horas
 
 export function createRoom(): Room {
@@ -39,6 +38,11 @@ export function getRoom(id: string): Room | undefined {
     return undefined;
   }
   return room;
+}
+
+/** Elimina una sala que no pudo configurarse en el proveedor de medios. */
+export function deleteRoom(id: string): void {
+  rooms.delete(id);
 }
 
 function isExpired(room: Room): boolean {

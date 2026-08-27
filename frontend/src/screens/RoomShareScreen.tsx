@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Icon } from "../components/Icon";
 
 interface RoomShareScreenProps {
   roomUrl: string;
@@ -27,6 +28,8 @@ export function RoomShareScreen({ roomUrl, onEnterCall }: RoomShareScreenProps) 
 
   return (
     <div className="screen screen--center">
+      <div className="feedback-icon feedback-icon--success" aria-hidden="true"><Icon name="check" size={30} /></div>
+      <p className="eyebrow">Todo listo</p>
       <h2 className="camera-error__title">Sala creada</h2>
       <p className="home-hint">Compartí este enlace con la persona con la que querés hablar.</p>
 
@@ -40,7 +43,8 @@ export function RoomShareScreen({ roomUrl, onEnterCall }: RoomShareScreenProps) 
           aria-label="Enlace de la sala"
         />
         <button type="button" className="btn btn--ghost" onClick={handleCopy}>
-          {copied ? "Copiado ✓" : "Copiar enlace"}
+          <Icon name={copied ? "check" : "copy"} size={18} />
+          {copied ? "Copiado" : "Copiar"}
         </button>
       </div>
 

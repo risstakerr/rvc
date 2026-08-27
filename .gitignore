@@ -8,3 +8,6 @@ build/
 *.log
 .cache/
 .tmp/
+
+# Local Netlify folder
+.netlify

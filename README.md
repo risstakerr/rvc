@@ -1,37 +1,60 @@
 # Videollamada Privada
 
-Aplicación de videollamadas privadas 1 a 1: creás una sala, compartís
-el enlace con una sola persona y hablan por video/audio con WebRTC
-P2P. No es matchmaking aleatorio ni tiene desconocidos: la estética
-minimalista (dos cámaras visibles + chat lateral) está inspirada
-visualmente en Omegle, pero el producto es conceptualmente similar a
-Google Meet/Zoom, mucho más simple.
+Aplicación de videollamadas privadas basada en LiveKit. Se crea una
+sala con un ID impredecible, se comparte el enlace y los medios se
+publican a la SFU de LiveKit; el backend nunca transporta audio o
+video.
 
-**Estado actual: Fase 6 de 16 — WebRTC P2P.**
-El backend genera salas reales con ID impredecible (`POST /rooms`) y
-las valida (`GET /rooms/:roomId`). El Home pide cámara/micrófono
-reales y tiene un botón "Crear llamada" que crea la sala, actualiza
-la URL a `/call/:roomId` (History API nativa, sin react-router) y
-muestra una pantalla para copiar el enlace. Abrir un enlace
-`/call/:roomId` directamente valida la sala contra el backend. El
-backend de signaling por WebSocket (`/ws`) maneja join/leave,
-reenvío de offer/answer/ICE candidates y el límite real de 2
-participantes por sala (Fase 5). El frontend ahora establece la
-conexión WebRTC P2P real entre los dos navegadores
-(`RTCPeerConnection`, con STUN público): quien se une y encuentra al
-otro participante ya esperando arma la oferta, el otro responde, y
-ambas cámaras remotas quedan visibles en la pantalla de llamada. Si
-la sala ya tiene 2 personas, se muestra "Esta llamada ya está
-completa.". Reconexión automática tras cortes, interfaz definitiva y
-chat lateral todavía no están implementados (fases 7, 8 y 10).
+**Estado actual: Fase 16 de 16 — auditoría final y release candidate.**
+El backend crea y valida salas, y emite tokens de acceso para LiveKit
+(`POST /livekit/token`). El cliente conecta la
+sala LiveKit, publica cámara y micrófono existentes, y reproduce los
+tracks remotos. El signaling P2P propio, las ofertas/respuestas, los
+candidatos ICE y el WebSocket de la aplicación ya no participan en
+una llamada activa. El backend crea cada sala en LiveKit con límite de
+10 participantes,
+verifica la capacidad antes de emitir un token y devuelve un rechazo
+controlado si se intenta ingresar como participante 11.
+
+El cliente mantiene un arreglo `participants[]` a partir de los
+eventos de LiveKit: detecta entradas y salidas, asocia los tracks de
+audio/video con la identidad estable del participante y reconstruye
+el snapshot después de una reconexión. La interfaz presenta un grid
+responsive de 1–10 tiles con avatar, nombre y estados de audio y
+conexión.
+
+Al finalizar una llamada se despublican los tracks, se desconecta de
+LiveKit sin dejar listeners activos y se liberan cámara y micrófono.
+La reconexión mantiene el estado de participantes mientras LiveKit la
+recupera y actualiza el estado visual durante el proceso.
+
+Durante una llamada, los controles de micrófono y cámara silencian o
+reactivan las publicaciones locales de LiveKit. También se puede elegir
+otro micrófono o cámara: el cliente reemplaza el track publicado sin
+desconectar la llamada.
+
+El chat usa Data Packets confiables de LiveKit: todos los participantes
+de la sala reciben los mensajes y cada cliente mantiene su historial
+solamente mientras dura su sesión.
+
+La pantalla puede compartirse desde el control de llamada. LiveKit
+publica ese track por separado de la cámara, y los demás participantes
+lo ven identificado como pantalla compartida.
+
+La grabación es opcional y server-side: cuando se configura LiveKit
+Egress y un bucket S3 compatible, se puede iniciar o detener desde la
+llamada. Las claves de LiveKit, S3 y control no llegan al navegador.
 
 ## Estructura
 
 ```
 /frontend   React + TypeScript + Vite (mobile-first)
-/backend    Node.js + TypeScript (servidor de signaling de salas, luego)
+/backend    Node.js + TypeScript (API de salas y tokens LiveKit)
 /shared     Tipos y contratos compartidos entre frontend y backend (workspace real de npm)
 ```
+
+El paquete `shared` se compila antes del frontend y backend. Sus artefactos
+`dist` son necesarios para ejecutar el backend compilado con Node en producción.
 
 ## Requisitos
 
@@ -75,12 +98,58 @@ backend.
 | `PORT`        | Puerto del servidor backend                    | `8787`                   |
 | `NODE_ENV`    | `development` \| `production` \| `test`        | `development`            |
 | `CORS_ORIGIN` | Origen permitido para CORS                     | `http://localhost:5173`  |
+| `TRUST_PROXY` | Confía en un único proxy inverso para obtener la IP | `false`              |
+| `LIVEKIT_URL` | URL `wss://` del servidor LiveKit              | —                         |
+| `LIVEKIT_API_KEY` | API key de LiveKit                         | —                         |
+| `LIVEKIT_API_SECRET` | API secret de LiveKit                   | —                         |
+| `LIVEKIT_TOKEN_TTL_SECONDS` | Caducidad del token LiveKit en segundos | `900`              |
+| `RECORDING_ENABLED` | Habilita LiveKit Egress                 | `false`                   |
+| `RECORDING_CONTROL_SECRET` | Firma las credenciales efímeras de control | —                    |
+| `RECORDING_S3_*` | Credenciales y destino S3 de grabaciones | —                         |
 
 ### frontend/.env
 
 | Variable             | Descripción                | Default                  |
 |----------------------|-----------------------------|---------------------------|
 | `VITE_API_BASE_URL`  | URL base del backend        | `http://localhost:8787`  |
+
+## Despliegue de producción
+
+La SFU no se despliega en Render: usá LiveKit Cloud o una instalación de
+LiveKit con TURN correctamente configurado. El backend Express solo crea salas
+y emite tokens; los navegadores se conectan directamente a LiveKit por WSS.
+
+1. Creá un proyecto en LiveKit Cloud y guardá su URL `wss://`, API key y API
+   secret exclusivamente en el backend.
+2. Importá este repositorio en Render como Blueprint. El archivo
+   [`render.yaml`](render.yaml) crea el servicio de API, compila el monorepo,
+   usa `GET /health` como health check y espera el cierre ordenado durante los
+   despliegues. Elegí una región próxima a los usuarios y a LiveKit.
+3. En Render cargá los valores marcados como secretos: `LIVEKIT_URL`,
+   `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` y `CORS_ORIGIN`. Este último debe
+   ser la URL HTTPS final de Netlify (o una lista separada por comas). No
+   copies ningún secreto en variables `VITE_*`.
+4. Con el dominio HTTPS de Render ya disponible, creá el sitio en Netlify. El
+   archivo [`netlify.toml`](netlify.toml) construye `frontend/dist` y conserva
+   las rutas SPA. Definí `VITE_API_BASE_URL=https://tu-api.onrender.com` antes
+   de desplegar; el build de producción rechaza una URL ausente o no HTTPS.
+5. Agregá dominios propios HTTPS en ambos proveedores, actualizá
+   `CORS_ORIGIN` con el dominio real del frontend y redeplegá el backend.
+
+`/health` sirve para disponibilidad del proceso y no requiere credenciales.
+Las comprobaciones de LiveKit suceden al crear una sala o emitir un token, de
+modo que un health check no expone claves ni genera tráfico contra la SFU.
+
+La aplicación no administra WebSocket, ICE ni TURN propios: LiveKit Cloud
+proporciona la señalización, conectividad ICE/TURN y medios. Para infraestructura
+propia, el operador debe publicar LiveKit por HTTPS/WSS y configurar TURN/TLS,
+UDP y TCP de acuerdo con la red objetivo. No uses Render Free como SFU: es
+apropiado solamente para esta API, y sus límites/cold starts deben evaluarse
+antes de usarla en producción.
+
+El estado de las salas y el rate limit son deliberadamente locales a una única
+instancia. Para escalar el backend horizontalmente hay que mover ambos a un
+almacenamiento compartido antes de aumentar réplicas.
 
 ## Scripts útiles (desde la raíz)
 
@@ -90,18 +159,28 @@ backend.
 - `npm run typecheck` — chequeo de tipos de los tres paquetes.
 - `npm run lint:backend` — lint del backend.
 
+## Seguridad
+
+El backend emite identidades aleatorias y tokens de LiveKit limitados a una
+sala, con caducidad de 15 minutos por defecto. CORS solo permite los orígenes
+explícitos configurados, nunca `*`; se pueden separar varios con comas.
+Los endpoints que crean salas, emiten tokens o controlan grabaciones tienen
+límites por IP, cuerpos JSON de hasta 16 KB y respuestas de error que no
+exponen secretos. Los límites son locales a cada instancia; un despliegue con
+múltiples instancias debe aplicar un rate limiter compartido o del proveedor.
+
 ## Roadmap (16 fases)
 
 El desarrollo avanza estrictamente una fase por vez, con autorización
-explícita antes de continuar. Fase actual: **6/16 — WebRTC P2P.**
+explícita antes de continuar. Fase actual: **16/16 — auditoría final y release candidate.**
+La auditoría y los criterios pendientes de aceptación están en
+[`FINAL_AUDIT.md`](FINAL_AUDIT.md).
 
 ## Principios de arquitectura
 
-- Salas privadas de máximo 2 participantes (`/call/:roomId`), sin
-  matchmaking ni usuarios aleatorios.
-- WebRTC P2P entre los dos usuarios; el servidor solo hace creación
-  de salas, signaling y presencia (nunca transporta video/audio salvo
-  fallback TURN futuro).
+- Salas privadas (`/call/:roomId`), sin matchmaking ni usuarios aleatorios.
+- LiveKit transporta los medios a través de una SFU; el backend solo
+  crea salas y autoriza el acceso mediante tokens.
 - No se graban ni almacenan videollamadas ni mensajes de chat.
 - Priorizar siempre free tier / costo $0 en la primera versión, sin
   sacrificar la arquitectura a largo plazo.
