@@ -1,9 +1,11 @@
 import { VideoPreview } from "./VideoPreview";
 import type { ParticipantConnectionState } from "../livekit/types";
+import type { LiveKitVideoAttachment } from "../livekit/types";
 import { Icon } from "./Icon";
 
 interface ParticipantTileProps {
   stream: MediaStream | null;
+  videoAttachment?: LiveKitVideoAttachment | null;
   name: string;
   isLocal: boolean;
   isVideoMuted: boolean;
@@ -22,6 +24,7 @@ const CONNECTION_LABEL: Record<ParticipantConnectionState, string> = {
 /** Tile reutilizable para un participante local o remoto de la llamada. */
 export function ParticipantTile({
   stream,
+  videoAttachment = null,
   name,
   isLocal,
   isVideoMuted,
@@ -36,7 +39,7 @@ export function ParticipantTile({
   return (
     <article className="participant-tile" aria-label={`${name}, ${CONNECTION_LABEL[connectionState]}`}>
       {hasVideo ? (
-        <VideoPreview stream={stream} mirrored={mirrored} muted className="participant-tile__video" />
+        <VideoPreview stream={stream} attachment={videoAttachment} mirrored={mirrored} muted className="participant-tile__video" />
       ) : (
         <div className="participant-tile__avatar" aria-label="Cámara apagada">
           {initial}

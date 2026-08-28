@@ -35,12 +35,20 @@ export type LiveKitConnectionState =
 
 export type ParticipantConnectionState = "connected" | "reconnecting" | "disconnected";
 
+/** Adaptador de una pista de video remota para adjuntarla al elemento visible. */
+export interface LiveKitVideoAttachment {
+  attach: (element: HTMLVideoElement) => void;
+  detach: (element: HTMLVideoElement) => void;
+}
+
 /** Estado de medios de un participante remoto, identificado por LiveKit. */
 export interface LiveKitParticipant {
   identity: string;
   name: string | null;
   videoStream: MediaStream | null;
+  videoAttachment: LiveKitVideoAttachment | null;
   screenShareStream: MediaStream | null;
+  screenShareAttachment: LiveKitVideoAttachment | null;
   audioStream: MediaStream | null;
   isVideoMuted: boolean;
   isScreenShareMuted: boolean;

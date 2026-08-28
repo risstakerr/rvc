@@ -22,7 +22,7 @@ import {
   type TrackPublication,
   Track,
 } from "livekit-client";
-import type { LiveKitConnectionState } from "./types";
+import type { LiveKitConnectionState, LiveKitVideoAttachment } from "./types";
 
 const CHAT_TOPIC = "pvc-chat-v1";
 
@@ -180,6 +180,7 @@ export interface LiveKitRemoteTrack {
   participantIdentity: string;
   kind: MediaStreamTrack["kind"];
   stream: MediaStream;
+  videoAttachment: LiveKitVideoAttachment | null;
   isMuted: boolean;
   source: "camera" | "screen_share" | "other";
 }
@@ -214,6 +215,13 @@ function toRemoteTrack(
     participantIdentity: participant.identity,
     kind: track.mediaStreamTrack.kind,
     stream: new MediaStream([track.mediaStreamTrack]),
+    videoAttachment:
+      track.kind === Track.Kind.Video
+        ? {
+            attach: (element) => { track.attach(element); },
+            detach: (element) => { track.detach(element); },
+          }
+        : null,
     isMuted: publication.isMuted,
     source:
       publication.source === Track.Source.ScreenShare

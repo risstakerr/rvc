@@ -1,10 +1,12 @@
 import { useEffect, useRef } from "react";
+import type { LiveKitVideoAttachment } from "../livekit/types";
 
 interface VideoPreviewProps {
   stream: MediaStream | null;
   mirrored?: boolean;
   muted?: boolean;
   className?: string;
+  attachment?: LiveKitVideoAttachment | null;
 }
 
 /**
@@ -19,14 +21,21 @@ interface VideoPreviewProps {
  * gente al verse a sí misma en una cámara frontal; el video remoto no
  * debe espejarse.
  */
-export function VideoPreview({ stream, mirrored = true, muted = true, className }: VideoPreviewProps) {
+export function VideoPreview({ stream, mirrored = true, muted = true, className, attachment = null }: VideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
+    if (attachment) {
+      attachment.attach(video);
+      return () => attachment.detach(video);
+    }
     video.srcObject = stream;
-  }, [stream]);
+    return () => {
+      video.srcObject = null;
+    };
+  }, [attachment, stream]);
 
   return (
     <video

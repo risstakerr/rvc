@@ -125,6 +125,7 @@ export function VideoCallScreen({
             <Fragment key={`${participant.identity}-${kind}`}>
               <ParticipantTile
                 stream={kind === "camera" ? participant.videoStream : participant.screenShareStream}
+                videoAttachment={kind === "camera" ? participant.videoAttachment : participant.screenShareAttachment}
                 name={kind === "camera" ? participant.name || "Invitado" : `${participant.name || "Invitado"} — pantalla`}
                 isLocal={false}
                 mirrored={kind === "camera"}
