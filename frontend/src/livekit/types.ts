@@ -13,6 +13,7 @@ export interface LiveKitTokenResponse {
   participantIdentity: string;
   maxParticipants: number;
   recordingControlToken: string | null;
+  chatHistoryToken: string | null;
 }
 
 export type LiveKitTokenErrorCode = "ROOM_FULL" | null;
@@ -63,6 +64,14 @@ export interface ChatMessage {
   senderName: string | null;
   text: string;
   timestamp: number;
+}
+
+export interface BoardItem {
+  id: string;
+  type: "text" | "link" | "image";
+  content: string;
+  x: number;
+  y: number;
 }
 
 export interface RecordingStatus {

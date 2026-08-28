@@ -22,14 +22,39 @@ import {
   type TrackPublication,
   Track,
 } from "livekit-client";
-import type { LiveKitConnectionState, LiveKitVideoAttachment } from "./types";
+import type { BoardItem, LiveKitConnectionState, LiveKitVideoAttachment } from "./types";
 
 const CHAT_TOPIC = "pvc-chat-v1";
+const BOARD_TOPIC = "pvc-board-v1";
 
 export interface LiveKitChatPayload {
   id: string;
   text: string;
   timestamp: number;
+}
+
+export type LiveKitBoardPayload = { action: "add" | "move" | "remove"; item: BoardItem };
+
+export async function publishLiveKitBoard(room: Room, event: LiveKitBoardPayload): Promise<void> {
+  await room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(event)), { reliable: true, topic: BOARD_TOPIC });
+}
+
+export function bindLiveKitBoard(room: Room, onEvent: (event: LiveKitBoardPayload) => void): () => void {
+  const onDataReceived = (payload: Uint8Array, participant?: Participant, _kind?: unknown, topic?: string) => {
+    if (topic !== BOARD_TOPIC || !participant || !room.remoteParticipants.has(participant.identity)) return;
+    try {
+      const parsed: unknown = JSON.parse(new TextDecoder().decode(payload));
+      if (!parsed || typeof parsed !== "object") return;
+      const event = parsed as Partial<LiveKitBoardPayload>;
+      const item = event.item;
+      if (!item || !["add", "move", "remove"].includes(event.action ?? "") || typeof item.id !== "string" ||
+        !["text", "link", "image"].includes(item.type) || typeof item.content !== "string" ||
+        typeof item.x !== "number" || typeof item.y !== "number") return;
+      onEvent(event as LiveKitBoardPayload);
+    } catch { /* paquete ajeno o invÃ¡lido */ }
+  };
+  room.on(RoomEvent.DataReceived, onDataReceived);
+  return () => room.off(RoomEvent.DataReceived, onDataReceived);
 }
 
 /**
@@ -67,6 +92,17 @@ export function isLiveKitSupported(): boolean {
  * razonables para esta app (adaptiveStream y dynacast reducen ancho
  * de banda en salas con varios participantes, que es hacia donde va
  * el proyecto). Esta función no conecta a ningún servidor.
+ *
+ * `rtcConfig.iceTransportPolicy: "relay"` fuerza a que TODO el medio
+ * pase por el relay TURN/TLS de LiveKit Cloud (puerto 443, indistinguible
+ * de tráfico HTTPS normal) en vez de intentar primero una ruta directa
+ * (host/srflx) por UDP. Se detectó en producción que, en ciertas redes
+ * (routers domésticos, firewalls corporativos), la señalización WebSocket
+ * conectaba con normalidad pero la negociación ICE por UDP directo nunca
+ * completaba: el track quedaba "Published" en LiveKit con bit rate/FPS
+ * en 0 y la sesión terminaba en CONNECTION_TIMEOUT. Forzar el relay agrega
+ * algo de latencia (medio extra salto por el TURN) pero es la única ruta
+ * que atraviesa de forma confiable ese tipo de redes.
  */
 export function createLiveKitRoom(): Room {
   return new Room({
@@ -79,7 +115,7 @@ export function createLiveKitRoom(): Room {
 
 /** Conecta una sala creada por esta capa sin dispersar acceso al SDK. */
 export async function connectLiveKitRoom(room: Room, url: string, token: string): Promise<void> {
-  await room.connect(url, token);
+  await room.connect(url, token, { rtcConfig: { iceTransportPolicy: "relay" } });
 }
 
 /** Publica los tracks locales existentes sin volver a pedir permisos al navegador. */

@@ -5,8 +5,9 @@ import { CallChat } from "../components/CallChat";
 import { ConnectionStatusBadge } from "../components/ConnectionStatusBadge";
 import { ParticipantTile } from "../components/ParticipantTile";
 import { Icon } from "../components/Icon";
+import { CollaborativeBoard } from "../components/CollaborativeBoard";
 import type { MediaDeviceOption } from "../hooks/useLocalMedia";
-import type { ChatMessage, LiveKitParticipant, ParticipantConnectionState, RecordingStatus } from "../livekit/types";
+import type { BoardItem, ChatMessage, LiveKitParticipant, ParticipantConnectionState, RecordingStatus } from "../livekit/types";
 
 interface VideoCallScreenProps {
   stream: MediaStream | null;
@@ -32,6 +33,10 @@ interface VideoCallScreenProps {
   chatMessages: ChatMessage[];
   chatError: string | null;
   onSendChatMessage: (text: string) => Promise<void>;
+  boardItems: BoardItem[];
+  onAddBoardItem: (type: BoardItem["type"], content: string) => Promise<void>;
+  onMoveBoardItem: (id: string, x: number, y: number) => Promise<void>;
+  onUploadBoardImage: (file: File) => Promise<void>;
   onEnd: () => void;
 }
 
@@ -71,6 +76,7 @@ export function VideoCallScreen({
   chatMessages,
   chatError,
   onSendChatMessage,
+  boardItems, onAddBoardItem, onMoveBoardItem, onUploadBoardImage,
   onEnd,
 }: VideoCallScreenProps) {
   const localConnectionState = toParticipantConnectionState(connectionState);
@@ -138,6 +144,8 @@ export function VideoCallScreen({
           ))}
         </div>
       </div>
+
+      <CollaborativeBoard items={boardItems} onAdd={onAddBoardItem} onMove={onMoveBoardItem} onUpload={onUploadBoardImage} />
 
       <div className="call-controls">
         <button

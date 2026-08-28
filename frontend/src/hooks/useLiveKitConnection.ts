@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LiveKitTokenError, requestLiveKitToken } from "../api/livekit";
+import { getChatHistory, saveChatMessage as persistChatMessage } from "../api/chat";
+import { uploadBoardImage } from "../api/board";
 import {
   getRecordingStatus as requestRecordingStatus,
   startRecording as requestStartRecording,
@@ -8,6 +10,7 @@ import {
 import {
   bindLiveKitRemoteTracks,
   bindLiveKitChat,
+  bindLiveKitBoard,
   connectLiveKitRoom,
   createLiveKitRoom,
   disconnectLiveKitRoom,
@@ -15,13 +18,14 @@ import {
   isLiveKitSupported,
   publishLiveKitTracks,
   publishLiveKitChat,
+  publishLiveKitBoard,
   replaceLiveKitTrack,
   RoomEvent,
   setLiveKitScreenShareEnabled,
   setLiveKitTrackEnabled,
   unpublishLiveKitTracks,
 } from "../livekit/livekit-client";
-import type { ChatMessage, LiveKitConnectionState, LiveKitParticipant, LiveKitTokenErrorCode, RecordingStatus } from "../livekit/types";
+import type { BoardItem, ChatMessage, LiveKitConnectionState, LiveKitParticipant, LiveKitTokenErrorCode, RecordingStatus } from "../livekit/types";
 
 interface UseLiveKitConnectionResult {
   state: LiveKitConnectionState;
@@ -38,6 +42,10 @@ interface UseLiveKitConnectionResult {
   chatMessages: ChatMessage[];
   chatError: string | null;
   sendChatMessage: (text: string) => Promise<void>;
+  boardItems: BoardItem[];
+  addBoardItem: (type: BoardItem["type"], content: string) => Promise<void>;
+  moveBoardItem: (id: string, x: number, y: number) => Promise<void>;
+  uploadBoardImage: (file: File) => Promise<void>;
   setTrackEnabled: (kind: "audio" | "video", enabled: boolean) => Promise<void>;
   replaceTrack: (kind: "audio" | "video", track: MediaStreamTrack) => Promise<void>;
 }
@@ -55,6 +63,7 @@ export function useLiveKitConnection(
   const [participants, setParticipants] = useState<LiveKitParticipant[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [boardItems, setBoardItems] = useState<BoardItem[]>([]);
   const [screenShareStream, setScreenShareStream] = useState<MediaStream | null>(null);
   const [screenShareError, setScreenShareError] = useState<string | null>(null);
   const [recordingStatus, setRecordingStatus] = useState<RecordingStatus | null>(null);
@@ -62,6 +71,7 @@ export function useLiveKitConnection(
   const roomRef = useRef<ReturnType<typeof createLiveKitRoom> | null>(null);
   const publishedTracksRef = useRef<MediaStreamTrack[]>([]);
   const recordingControlTokenRef = useRef<string | null>(null);
+  const chatHistoryTokenRef = useRef<string | null>(null);
   const supported = isLiveKitSupported();
 
   useEffect(() => {
@@ -227,6 +237,13 @@ export function useLiveKitConnection(
         ];
       });
     });
+    const unbindBoard = bindLiveKitBoard(room, (event) => {
+      setBoardItems((current) => event.action === "add"
+        ? (current.some((item) => item.id === event.item.id) ? current : [...current, event.item])
+        : event.action === "move"
+          ? current.map((item) => item.id === event.item.id ? event.item : item)
+          : current.filter((item) => item.id !== event.item.id));
+    });
     const onReconnecting = () => {
       setParticipants((current) => current.map((participant) => ({ ...participant, connectionState: "reconnecting" })));
       setState("reconnecting");
@@ -253,12 +270,28 @@ export function useLiveKitConnection(
         setParticipants([]);
         setChatMessages([]);
         setChatError(null);
+        setBoardItems([]);
         setScreenShareStream(null);
         setScreenShareError(null);
         setRecordingStatus(null);
         setRecordingError(null);
         const credentials = await requestLiveKitToken(roomId, participantName);
         recordingControlTokenRef.current = credentials.recordingControlToken;
+        chatHistoryTokenRef.current = credentials.chatHistoryToken;
+        if (credentials.chatHistoryToken) {
+          void getChatHistory(roomId, credentials.chatHistoryToken)
+            .then((messages) => {
+              if (!disposed) {
+                setChatMessages((current) => [
+                  ...messages,
+                  ...current.filter((message) => !messages.some((historyMessage) => historyMessage.id === message.id)),
+                ]);
+              }
+            })
+            .catch(() => {
+              if (!disposed) setChatError("No se pudo cargar el historial del chat.");
+            });
+        }
         if (credentials.recordingControlToken) {
           void requestRecordingStatus(roomId, credentials.recordingControlToken)
             .then(setRecordingStatus)
@@ -294,11 +327,13 @@ export function useLiveKitConnection(
       disposed = true;
       if (roomRef.current === room) roomRef.current = null;
       recordingControlTokenRef.current = null;
+      chatHistoryTokenRef.current = null;
       room.off(RoomEvent.Reconnecting, onReconnecting);
       room.off(RoomEvent.Reconnected, onReconnected);
       room.off(RoomEvent.Disconnected, onDisconnected);
       unbindRemoteTracks();
       unbindChat();
+      unbindBoard();
       void (async () => {
         await unpublishLiveKitTracks(room, publishedTracksRef.current).catch(() => undefined);
         publishedTracksRef.current = [];
@@ -375,16 +410,44 @@ export function useLiveKitConnection(
     }
     const message = { id: crypto.randomUUID(), text: messageText, timestamp: Date.now() };
     try {
+      const historyToken = chatHistoryTokenRef.current;
+      const savedMessage = historyToken && roomId
+        ? await persistChatMessage(roomId, historyToken, message.id, message.text)
+        : { ...message, type: "message" as const, senderIdentity: room.localParticipant.identity, senderName: "Vos" };
       await publishLiveKitChat(room, message);
       setChatMessages((current) => [
         ...current,
-        { ...message, type: "message", senderIdentity: room.localParticipant.identity, senderName: "Vos" },
+        { ...savedMessage, senderName: "Vos" },
       ]);
       setChatError(null);
     } catch {
       setChatError("No se pudo enviar el mensaje. Intentá nuevamente.");
     }
+  }, [roomId]);
+
+  const addBoardItem = useCallback(async (type: BoardItem["type"], content: string) => {
+    const room = roomRef.current;
+    const value = content.trim();
+    if (!room || !value) return;
+    const item: BoardItem = { id: crypto.randomUUID(), type, content: value, x: 12 + (Math.random() * 45), y: 12 + (Math.random() * 40) };
+    await publishLiveKitBoard(room, { action: "add", item });
+    setBoardItems((current) => [...current, item]);
   }, []);
+
+  const moveBoardItem = useCallback(async (id: string, x: number, y: number) => {
+    const room = roomRef.current;
+    const item = boardItems.find((candidate) => candidate.id === id);
+    if (!room || !item) return;
+    const moved = { ...item, x: Math.max(0, Math.min(88, x)), y: Math.max(0, Math.min(84, y)) };
+    setBoardItems((current) => current.map((candidate) => candidate.id === id ? moved : candidate));
+    await publishLiveKitBoard(room, { action: "move", item: moved });
+  }, [boardItems]);
+
+  const uploadBoardImageFile = useCallback(async (file: File) => {
+    if (!roomId || !chatHistoryTokenRef.current) throw new Error("El pizarrÃ³n todavÃ­a no estÃ¡ disponible.");
+    const url = await uploadBoardImage(roomId, chatHistoryTokenRef.current, file);
+    await addBoardItem("image", url);
+  }, [addBoardItem, roomId]);
 
   if (!roomId) {
     return {
@@ -402,6 +465,10 @@ export function useLiveKitConnection(
       chatMessages: [],
       chatError: null,
       sendChatMessage,
+      boardItems: [],
+      addBoardItem,
+      moveBoardItem,
+      uploadBoardImage: uploadBoardImageFile,
       setTrackEnabled,
       replaceTrack,
     };
@@ -422,6 +489,10 @@ export function useLiveKitConnection(
       chatMessages: [],
       chatError: "Este navegador no soporta LiveKit.",
       sendChatMessage,
+      boardItems: [],
+      addBoardItem,
+      moveBoardItem,
+      uploadBoardImage: uploadBoardImageFile,
       setTrackEnabled,
       replaceTrack,
     };
@@ -441,6 +512,10 @@ export function useLiveKitConnection(
     chatMessages,
     chatError,
     sendChatMessage,
+    boardItems,
+    addBoardItem,
+    moveBoardItem,
+    uploadBoardImage: uploadBoardImageFile,
     setTrackEnabled,
     replaceTrack,
   };

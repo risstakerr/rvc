@@ -4,6 +4,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
 import { isValidParticipantName, isValidRoomId, MAX_ROOM_PARTICIPANTS } from "@pvc/shared";
 import { env } from "./config/env.js";
+import { createChatSessionToken, listChatMessages, saveBoardImage, saveChatMessage, verifyChatSessionToken } from "./chat/chat-history.js";
 import { createRoom, deleteRoom, getRoom, pruneExpiredRooms } from "./rooms/room-store.js";
 import {
   createRecordingControlToken,
@@ -38,6 +39,26 @@ app.use(
     maxAge: 600,
   }),
 );
+
+const BOARD_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+
+// Debe registrarse antes del parser JSON global para recibir archivos binarios.
+app.post("/rooms/:roomId/board/assets", rateLimit(20, 60 * 1000), express.raw({ type: "image/*", limit: "8mb" }), async (req, res) => {
+  const roomId = req.params.roomId;
+  if (!roomId || !isValidRoomId(roomId)) return res.status(400).json({ error: "ID de sala invÃ¡lido" });
+  if (!verifyChatSessionToken(req.header("authorization")?.replace(/^Bearer /, ""), roomId)) {
+    return res.status(403).json({ error: "No tenÃ©s permiso para subir archivos" });
+  }
+  const mimeType = req.header("content-type")?.split(";")[0]?.toLowerCase();
+  if (!mimeType || !BOARD_IMAGE_TYPES.has(mimeType) || !Buffer.isBuffer(req.body) || req.body.length === 0) {
+    return res.status(400).json({ error: "Solo se admiten imÃ¡genes JPG, PNG, WebP o GIF de hasta 8 MB" });
+  }
+  try {
+    res.status(201).json({ url: await saveBoardImage(roomId, randomUUID(), mimeType, req.body) });
+  } catch {
+    res.status(503).json({ error: "No se pudo subir la imagen" });
+  }
+});
 app.use(express.json({ limit: "16kb", strict: true }));
 
 app.get("/health", (_req: Request, res: Response) => {
@@ -146,13 +167,88 @@ app.post("/livekit/token", rateLimit(30, 10 * 60 * 1000), async (req: Request, r
     participantIdentity,
     maxParticipants: MAX_ROOM_PARTICIPANTS,
     recordingControlToken: createRecordingControlToken(roomId, participantIdentity),
+    chatHistoryToken: createChatSessionToken(roomId, participantIdentity, tokenRequest.participantName),
   });
 });
 
-function canControlRecording(req: Request, roomId: string): boolean {
+function getBearerToken(req: Request): string | undefined {
   const authorization = req.header("authorization");
-  const token = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : undefined;
-  return verifyRecordingControlToken(token, roomId);
+  return authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : undefined;
+}
+
+function getChatSession(req: Request, roomId: string) {
+  return verifyChatSessionToken(getBearerToken(req), roomId);
+}
+
+app.get("/rooms/:roomId/messages", rateLimit(60, 60 * 1000), async (req: Request, res: Response) => {
+  const roomId = req.params.roomId;
+  if (!roomId || !isValidRoomId(roomId)) {
+    res.status(400).json({ error: "ID de sala invÃ¡lido" });
+    return;
+  }
+  if (!getChatSession(req, roomId)) {
+    res.status(403).json({ error: "No tenÃ©s permiso para consultar el historial" });
+    return;
+  }
+  try {
+    res.json({ messages: await listChatMessages(roomId) });
+  } catch {
+    res.status(503).json({ error: "El historial de chat no estÃ¡ disponible" });
+  }
+});
+
+function getChatMessageRequest(body: unknown): { id: string; text: string } | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const { id, text } = body as Record<string, unknown>;
+  if (
+    Object.keys(body).length !== 2 || typeof id !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id) ||
+    typeof text !== "string" || text !== text.trim() || !text || text.length > 1_000 || hasControlCharacters(text)
+  ) return null;
+  return { id, text };
+}
+
+function hasControlCharacters(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0)!;
+    return codePoint <= 31 || codePoint === 127;
+  });
+}
+
+app.post("/rooms/:roomId/messages", rateLimit(60, 60 * 1000), async (req: Request, res: Response) => {
+  const roomId = req.params.roomId;
+  if (!roomId || !isValidRoomId(roomId)) {
+    res.status(400).json({ error: "ID de sala invÃ¡lido" });
+    return;
+  }
+  const session = getChatSession(req, roomId);
+  if (!session) {
+    res.status(403).json({ error: "No tenÃ©s permiso para guardar mensajes" });
+    return;
+  }
+  const input = getChatMessageRequest(req.body);
+  if (!input) {
+    res.status(400).json({ error: "Mensaje invÃ¡lido" });
+    return;
+  }
+  const message = {
+    id: input.id,
+    roomId,
+    senderIdentity: session.participantIdentity,
+    senderName: session.participantName,
+    text: input.text,
+    sentAt: Date.now(),
+  };
+  try {
+    await saveChatMessage(message);
+    res.status(201).json(message);
+  } catch {
+    res.status(503).json({ error: "No se pudo guardar el mensaje" });
+  }
+});
+
+function canControlRecording(req: Request, roomId: string): boolean {
+  return verifyRecordingControlToken(getBearerToken(req), roomId);
 }
 
 function validateRecordingRequest(req: Request, res: Response): string | null {

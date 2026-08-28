@@ -300,6 +300,10 @@ function App() {
           chatMessages={liveKit.chatMessages}
           chatError={liveKit.chatError}
           onSendChatMessage={liveKit.sendChatMessage}
+          boardItems={liveKit.boardItems}
+          onAddBoardItem={liveKit.addBoardItem}
+          onMoveBoardItem={liveKit.moveBoardItem}
+          onUploadBoardImage={liveKit.uploadBoardImage}
           onEnd={handleEndCall}
         />
       )}

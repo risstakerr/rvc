@@ -22,6 +22,8 @@ interface Env {
   RECORDING_S3_BUCKET: string | undefined;
   RECORDING_S3_REGION: string | undefined;
   RECORDING_S3_ENDPOINT: string | undefined;
+  SUPABASE_URL: string | undefined;
+  SUPABASE_SECRET_KEY: string | undefined;
 }
 
 function parsePort(raw: string | undefined, fallback: number): number {
@@ -98,7 +100,18 @@ export const env: Env = {
   RECORDING_S3_BUCKET: process.env["RECORDING_S3_BUCKET"],
   RECORDING_S3_REGION: process.env["RECORDING_S3_REGION"],
   RECORDING_S3_ENDPOINT: process.env["RECORDING_S3_ENDPOINT"],
+  SUPABASE_URL: process.env["SUPABASE_URL"],
+  SUPABASE_SECRET_KEY: process.env["SUPABASE_SECRET_KEY"],
 };
+
+if (env.SUPABASE_URL) {
+  try {
+    const url = new URL(env.SUPABASE_URL);
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) throw new Error();
+  } catch {
+    throw new Error("SUPABASE_URL debe ser una URL HTTPS vÃ¡lida.");
+  }
+}
 
 if (env.NODE_ENV === "production") {
   if (env.CORS_ORIGINS.some((origin) => new URL(origin).protocol !== "https:")) {
