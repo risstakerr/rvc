@@ -39,7 +39,7 @@ export function HomeScreen({
   const isReady = mediaStatus === "ready";
 
   return (
-    <div className="screen screen--center">
+    <div className="screen screen--center screen--home">
       <div className="brand-mark" aria-hidden="true"><Icon name="video" size={28} /></div>
       <div className="home-hero">
         <p className="eyebrow">Conexiones privadas</p>

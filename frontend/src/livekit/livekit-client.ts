@@ -70,7 +70,9 @@ export function isLiveKitSupported(): boolean {
  */
 export function createLiveKitRoom(): Room {
   return new Room({
-    adaptiveStream: true,
+    // Esta UI enlaza el MediaStream en React; adaptiveStream exige usar
+    // RemoteTrack.attach() para detectar el elemento visible.
+    adaptiveStream: false,
     dynacast: true,
   });
 }

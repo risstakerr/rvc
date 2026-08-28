@@ -35,3 +35,85 @@
   .call-main { min-height:0; }
   .call-chat { width:100%; flex:0 0 min(38dvh,19rem); }
 }
+
+/* Pantallas de entrada y de estado: una escala común evita que cada vista
+   parezca una composición distinta. El fondo decorativo queda acotado al
+   contenido y nunca interfiere con controles o con el scroll. */
+.screen--center {
+  position:relative;
+  isolation:isolate;
+  gap:clamp(.85rem, 2vh, 1.35rem);
+  padding-block:clamp(1.5rem, 5vh, 3.5rem);
+}
+
+.screen--center::before {
+  position:absolute;
+  width:clamp(20rem, 42vw, 32rem);
+  height:clamp(20rem, 42vw, 32rem);
+  background:radial-gradient(circle, rgba(111,91,255,.17), rgba(111,91,255,.06) 48%, transparent 72%);
+  filter:blur(1px);
+}
+
+.screen--home { gap:clamp(.7rem, 1.6vh, 1.15rem); }
+.screen--home::before { transform:translateY(1.5rem); }
+.screen--center > * { position:relative; z-index:1; }
+
+.brand-mark {
+  width:clamp(3.25rem, 5vw, 4rem);
+  height:clamp(3.25rem, 5vw, 4rem);
+  border-radius:clamp(1rem, 1.8vw, 1.35rem);
+}
+
+.home-hero { gap:.6rem; }
+
+.home-hero__title,
+.camera-error__title {
+  max-width:11.5ch;
+  margin:0;
+  font-family:Manrope,sans-serif;
+  font-size:clamp(2.15rem, 4.2vw, 3.7rem);
+  letter-spacing:-.06em;
+  line-height:1.03;
+  text-wrap:balance;
+}
+
+.camera-error__title { max-width:18ch; font-size:clamp(1.65rem, 3vw, 2.35rem); }
+.home-hero__subtitle,.home-hint { max-width:39ch; text-wrap:balance; }
+
+.camera-check { width:min(100%, 24rem); gap:.75rem; }
+.camera-check__preview { aspect-ratio:16 / 10; border-radius:20px; }
+.camera-check__controls .icon-btn { width:46px; height:46px; border-radius:14px; }
+
+.room-link { align-items:center; min-height:3.5rem; }
+.room-link__input { min-height:2.5rem; }
+
+/* La barra de estado no debe competir visualmente con la llamada. */
+.call-screen__topbar > [role="status"]:not(.status-badge) {
+  overflow:hidden;
+  max-width:min(46vw, 32rem);
+  color:var(--muted);
+  font-size:.72rem;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+@media (max-width:759px) {
+  .screen--center { padding-block:1.5rem; }
+  .screen--center::before { width:23rem; height:23rem; }
+  .home-hero__title { font-size:clamp(2.1rem, 11vw, 3rem); }
+  .camera-check { width:min(100%, 22rem); }
+  .room-link { padding:.45rem; }
+  .call-screen__topbar > [role="status"]:not(.status-badge) { display:none; }
+}
+
+/* Con zoom reducido el navegador expone un viewport CSS mucho más ancho.
+   Esta escala mantiene legibles las pantallas de entrada sin afectar el
+   desktop habitual ni el móvil. */
+@media (min-width:1600px) and (min-height:850px) {
+  .screen--home { gap:1rem; }
+  .screen--home .brand-mark { width:4.4rem; height:4.4rem; border-radius:1.45rem; }
+  .screen--home .home-hero__title { font-size:4.1rem; }
+  .screen--home .home-hero__subtitle { font-size:1.08rem; }
+  .screen--home .camera-check { width:27rem; }
+  .screen--home .btn--lg { width:27rem; min-height:3.75rem; font-size:1.06rem; }
+}
