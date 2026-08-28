@@ -90,7 +90,13 @@ export async function publishLiveKitTracks(room: Room, stream: MediaStream): Pro
   if (!hasAudio || !hasVideo) {
     throw new Error("No hay una cámara y un micrófono disponibles para publicar.");
   }
-  await Promise.all(tracks.map((track) => room.localParticipant.publishTrack(track)));
+  await Promise.all(
+    tracks.map((track) =>
+      room.localParticipant.publishTrack(track, {
+        source: track.kind === "audio" ? Track.Source.Microphone : Track.Source.Camera,
+      }),
+    ),
+  );
   return tracks;
 }
 
