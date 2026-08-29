@@ -14,7 +14,7 @@ import { RoomFullScreen } from "./screens/RoomFullScreen";
 import { VideoCallScreen } from "./screens/VideoCallScreen";
 import { CameraErrorScreen } from "./screens/CameraErrorScreen";
 
-type BackendStatus = "checking" | "online" | "offline";
+type BackendStatus = "checking" | "online" | "reconnecting" | "offline";
 
 function App() {
   const [backendStatus, setBackendStatus] = useState<BackendStatus>("checking");
@@ -59,24 +59,33 @@ function App() {
   // para volver ahí (y no siempre a Home) cuando el permiso se recupera.
   const preErrorViewRef = useRef<View>("home");
 
-  // Chequeo de salud del backend heredado de la Fase 1.
+  // Render puede tardar unos segundos al reiniciar o despertar una instancia.
+  // No mostramos un falso "sin conexión" por un único fallo transitorio y
+  // seguimos intentando recuperar el servicio si realmente estuvo caído.
   useEffect(() => {
     let cancelled = false;
+    let retryTimer: number | undefined;
+    let attempts = 0;
 
-    fetch(`${API_BASE_URL}/health`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then(() => {
+    const checkBackend = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/health`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        await response.json();
         if (!cancelled) setBackendStatus("online");
-      })
-      .catch(() => {
-        if (!cancelled) setBackendStatus("offline");
-      });
+      } catch {
+        if (cancelled) return;
+        attempts += 1;
+        setBackendStatus(attempts >= 3 ? "offline" : "reconnecting");
+        retryTimer = window.setTimeout(checkBackend, Math.min(15_000, attempts * 3_000));
+      }
+    };
+
+    void checkBackend();
 
     return () => {
       cancelled = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
   }, []);
 
@@ -246,7 +255,9 @@ function App() {
     <div className="app-shell">
       {backendStatus !== "online" && (
         <div className={`backend-banner backend-banner--${backendStatus}`} role="status">
-          {backendStatus === "checking" ? "Conectando con el servidor…" : "Sin conexión con el servidor"}
+          {backendStatus === "offline"
+            ? "Sin conexión con el servidor. Reintentando automáticamente…"
+            : "Conectando con el servidor…"}
         </div>
       )}
 
@@ -303,7 +314,12 @@ function App() {
           boardItems={liveKit.boardItems}
           onAddBoardItem={liveKit.addBoardItem}
           onMoveBoardItem={liveKit.moveBoardItem}
+          onResizeBoardItem={liveKit.resizeBoardItem}
+          onRemoveBoardItem={liveKit.removeBoardItem}
           onUploadBoardImage={liveKit.uploadBoardImage}
+          boardVisible={liveKit.boardVisible}
+          onOpenBoard={liveKit.openBoard}
+          onHideBoard={liveKit.hideBoard}
           onEnd={handleEndCall}
         />
       )}

@@ -18,7 +18,6 @@ export interface Room {
 const rooms = new Map<string, Room>();
 
 /** Tiempo máximo que una sala creada vive sin actividad. */
-const ROOM_TTL_MS = 6 * 60 * 60 * 1000; // 6 horas
 
 export function createRoom(): Room {
   let id = generateRoomId();
@@ -32,12 +31,7 @@ export function createRoom(): Room {
 }
 
 export function getRoom(id: string): Room | undefined {
-  const room = rooms.get(id);
-  if (room && isExpired(room)) {
-    rooms.delete(room.id);
-    return undefined;
-  }
-  return room;
+  return rooms.get(id);
 }
 
 /** Elimina una sala que no pudo configurarse en el proveedor de medios. */
@@ -45,17 +39,9 @@ export function deleteRoom(id: string): void {
   rooms.delete(id);
 }
 
-function isExpired(room: Room): boolean {
-  return Date.now() - room.createdAt > ROOM_TTL_MS;
-}
-
 /** Barrido periódico para no dejar crecer el mapa indefinidamente con salas abandonadas. */
 export function pruneExpiredRooms(): void {
-  for (const room of rooms.values()) {
-    if (isExpired(room)) {
-      rooms.delete(room.id);
-    }
-  }
+  // Las salas se conservan hasta que se eliminen explÃ­citamente.
 }
 
 /** Solo para tests/inspección. */

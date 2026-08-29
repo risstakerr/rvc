@@ -4,12 +4,12 @@
   "private": true,
   "workspaces": ["frontend", "backend", "shared"],
   "scripts": {
-    "dev:frontend": "npm run build:shared && npm --prefix frontend run dev",
-    "dev:backend": "npm run build:shared && npm --prefix backend run dev",
-    "build:shared": "npm --prefix shared run build",
-    "build:frontend": "npm run build:shared && npm --prefix frontend run build",
-    "build:backend": "npm run build:shared && npm --prefix backend run build",
-    "typecheck": "npm --prefix shared run build && npm --prefix shared run typecheck && npm --prefix backend run typecheck && (cd frontend && npx tsc -p tsconfig.app.json --noEmit)",
-    "lint:backend": "npm --prefix backend run lint"
+    "dev:frontend": "npm run build:shared && npm run --workspace @pvc/frontend dev",
+    "dev:backend": "npm run build:shared && npm run --workspace @pvc/backend dev",
+    "build:shared": "npm run --workspace @pvc/shared build",
+    "build:frontend": "npm run build:shared && npm run --workspace @pvc/frontend build",
+    "build:backend": "npm run build:shared && npm run --workspace @pvc/backend build",
+    "typecheck": "npm run --workspace @pvc/shared build && npm run --workspace @pvc/shared typecheck && npm run --workspace @pvc/backend typecheck && npx tsc -p frontend/tsconfig.app.json --noEmit",
+    "lint:backend": "npm run --workspace @pvc/backend lint"
   }
 }
