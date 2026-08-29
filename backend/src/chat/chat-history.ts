@@ -13,6 +13,20 @@ export interface ChatHistoryMessage {
   sentAt: number;
 }
 
+export interface PersistedBoardItem {
+  id: string;
+  type: "text" | "link" | "image" | "video" | "arrow";
+  content: string;
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  targetId?: string;
+  sourceId?: string;
+  targetX?: number;
+  targetY?: number;
+}
+
 interface ChatSession {
   roomId: string;
   participantIdentity: string;
@@ -117,7 +131,7 @@ export async function saveChatMessage(message: ChatHistoryMessage): Promise<void
 
 export async function saveBoardImage(roomId: string, id: string, mimeType: string, bytes: Buffer): Promise<string> {
   if (!isConfigured()) throw new Error("El pizarrÃ³n no estÃ¡ configurado.");
-  const extension = mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : mimeType === "image/gif" ? "gif" : "jpg";
+  const extension = mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : mimeType === "image/gif" ? "gif" : mimeType === "video/webm" ? "webm" : mimeType === "video/ogg" ? "ogv" : mimeType === "video/mp4" ? "mp4" : "jpg";
   const objectPath = `${roomId}/${id}.${extension}`;
   const response = await fetch(`${env.SUPABASE_URL!.replace(/\/$/, "")}/storage/v1/object/board-assets/${objectPath}`, {
     method: "POST",
@@ -126,4 +140,27 @@ export async function saveBoardImage(roomId: string, id: string, mimeType: strin
   });
   if (!response.ok) throw new Error("No se pudo subir la imagen.");
   return `${env.SUPABASE_URL!.replace(/\/$/, "")}/storage/v1/object/public/board-assets/${objectPath}`;
+}
+
+export async function listBoardItems(roomId: string): Promise<PersistedBoardItem[]> {
+  if (!isConfigured()) throw new Error("El pizarrón no está configurado.");
+  const response = await fetch(apiUrl(`board_items?select=item&room_id=eq.${encodeURIComponent(roomId)}&order=updated_at.asc`), { headers: headers() });
+  if (!response.ok) throw new Error("No se pudo cargar el pizarrón.");
+  const rows: unknown = await response.json();
+  return Array.isArray(rows) ? rows.flatMap((row) => row && typeof row === "object" && "item" in row ? [(row as { item: PersistedBoardItem }).item] : []) : [];
+}
+
+export async function saveBoardItem(roomId: string, item: PersistedBoardItem): Promise<void> {
+  if (!isConfigured()) throw new Error("El pizarrón no está configurado.");
+  const response = await fetch(apiUrl("board_items?on_conflict=id"), {
+    method: "POST", headers: headers("resolution=merge-duplicates,return=minimal"),
+    body: JSON.stringify({ id: item.id, room_id: roomId, item, updated_at: new Date().toISOString() }),
+  });
+  if (!response.ok) throw new Error("No se pudo guardar el pizarrón.");
+}
+
+export async function deleteBoardItem(roomId: string, id: string): Promise<void> {
+  if (!isConfigured()) throw new Error("El pizarrón no está configurado.");
+  const response = await fetch(apiUrl(`board_items?id=eq.${encodeURIComponent(id)}&room_id=eq.${encodeURIComponent(roomId)}`), { method: "DELETE", headers: headers("return=minimal") });
+  if (!response.ok) throw new Error("No se pudo eliminar el elemento.");
 }

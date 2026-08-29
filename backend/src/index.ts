@@ -4,7 +4,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
 import { isValidParticipantName, isValidRoomId, MAX_ROOM_PARTICIPANTS } from "@pvc/shared";
 import { env } from "./config/env.js";
-import { createChatSessionToken, listChatMessages, saveBoardImage, saveChatMessage, verifyChatSessionToken } from "./chat/chat-history.js";
+import { createChatSessionToken, deleteBoardItem, listBoardItems, listChatMessages, saveBoardImage, saveBoardItem, saveChatMessage, verifyChatSessionToken } from "./chat/chat-history.js";
 import { createRoom, deleteRoom, getRoom, pruneExpiredRooms } from "./rooms/room-store.js";
 import {
   createRecordingControlToken,
@@ -60,6 +60,25 @@ app.post("/rooms/:roomId/board/assets", rateLimit(20, 60 * 1000), express.raw({ 
   }
 });
 app.use(express.json({ limit: "16kb", strict: true }));
+
+app.get("/rooms/:roomId/board", rateLimit(60, 60 * 1000), async (req, res) => {
+  const roomId = req.params.roomId;
+  if (!roomId || !isValidRoomId(roomId) || !getChatSession(req, roomId)) return res.status(403).json({ error: "No tenés permiso para acceder al pizarrón" });
+  try { res.json({ items: await listBoardItems(roomId) }); } catch { res.status(503).json({ error: "No se pudo cargar el pizarrón" }); }
+});
+
+app.post("/rooms/:roomId/board", rateLimit(120, 60 * 1000), async (req, res) => {
+  const roomId = req.params.roomId;
+  const item = req.body?.item;
+  if (!roomId || !isValidRoomId(roomId) || !getChatSession(req, roomId) || !item || typeof item !== "object" || typeof item.id !== "string") return res.status(400).json({ error: "Elemento de pizarrón inválido" });
+  try { await saveBoardItem(roomId, item); res.status(204).end(); } catch { res.status(503).json({ error: "No se pudo guardar el pizarrón" }); }
+});
+
+app.delete("/rooms/:roomId/board/:itemId", rateLimit(120, 60 * 1000), async (req, res) => {
+  const { roomId, itemId } = req.params;
+  if (!roomId || !itemId || !isValidRoomId(roomId) || !getChatSession(req, roomId)) return res.status(403).json({ error: "No tenés permiso para editar el pizarrón" });
+  try { await deleteBoardItem(roomId, itemId); res.status(204).end(); } catch { res.status(503).json({ error: "No se pudo eliminar el elemento" }); }
+});
 
 app.get("/health", (_req: Request, res: Response) => {
   res.json({ status: "ok", uptimeSeconds: process.uptime() });

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LiveKitTokenError, requestLiveKitToken } from "../api/livekit";
 import { getChatHistory, saveChatMessage as persistChatMessage } from "../api/chat";
-import { uploadBoardImage } from "../api/board";
+import { deleteBoardItem as persistDeletedBoardItem, getBoardItems, saveBoardItem as persistBoardItem, uploadBoardImage } from "../api/board";
 import {
   getRecordingStatus as requestRecordingStatus,
   startRecording as requestStartRecording,
@@ -43,9 +43,14 @@ interface UseLiveKitConnectionResult {
   chatError: string | null;
   sendChatMessage: (text: string) => Promise<void>;
   boardItems: BoardItem[];
-  addBoardItem: (type: BoardItem["type"], content: string) => Promise<void>;
+  addBoardItem: (type: BoardItem["type"], content: string, position?: Pick<BoardItem, "x" | "y"> & Partial<Pick<BoardItem, "sourceId" | "targetId" | "targetX" | "targetY" | "width" | "height">>) => Promise<void>;
   moveBoardItem: (id: string, x: number, y: number) => Promise<void>;
-  uploadBoardImage: (file: File) => Promise<void>;
+  resizeBoardItem: (id: string, width: number, height: number) => Promise<void>;
+  removeBoardItem: (id: string) => Promise<void>;
+  uploadBoardImage: (file: File, position?: Pick<BoardItem, "x" | "y">) => Promise<void>;
+  boardVisible: boolean;
+  openBoard: () => Promise<void>;
+  hideBoard: () => void;
   setTrackEnabled: (kind: "audio" | "video", enabled: boolean) => Promise<void>;
   replaceTrack: (kind: "audio" | "video", track: MediaStreamTrack) => Promise<void>;
 }
@@ -64,6 +69,7 @@ export function useLiveKitConnection(
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
   const [boardItems, setBoardItems] = useState<BoardItem[]>([]);
+  const [boardVisible, setBoardVisible] = useState(false);
   const [screenShareStream, setScreenShareStream] = useState<MediaStream | null>(null);
   const [screenShareError, setScreenShareError] = useState<string | null>(null);
   const [recordingStatus, setRecordingStatus] = useState<RecordingStatus | null>(null);
@@ -238,6 +244,11 @@ export function useLiveKitConnection(
       });
     });
     const unbindBoard = bindLiveKitBoard(room, (event) => {
+      if (event.action === "activate") {
+        setBoardVisible(true);
+        return;
+      }
+      setBoardVisible(true);
       setBoardItems((current) => event.action === "add"
         ? (current.some((item) => item.id === event.item.id) ? current : [...current, event.item])
         : event.action === "move"
@@ -271,6 +282,7 @@ export function useLiveKitConnection(
         setChatMessages([]);
         setChatError(null);
         setBoardItems([]);
+        setBoardVisible(false);
         setScreenShareStream(null);
         setScreenShareError(null);
         setRecordingStatus(null);
@@ -279,6 +291,9 @@ export function useLiveKitConnection(
         recordingControlTokenRef.current = credentials.recordingControlToken;
         chatHistoryTokenRef.current = credentials.chatHistoryToken;
         if (credentials.chatHistoryToken) {
+          void getBoardItems(roomId, credentials.chatHistoryToken)
+            .then((items) => { if (!disposed) { setBoardItems(items); setBoardVisible(items.length > 0); } })
+            .catch(() => undefined);
           void getChatHistory(roomId, credentials.chatHistoryToken)
             .then((messages) => {
               if (!disposed) {
@@ -409,27 +424,45 @@ export function useLiveKitConnection(
       return;
     }
     const message = { id: crypto.randomUUID(), text: messageText, timestamp: Date.now() };
+    const localMessage: ChatMessage = {
+      ...message,
+      type: "message",
+      senderIdentity: room.localParticipant.identity,
+      senderName: "Vos",
+    };
+    setChatMessages((current) => [...current, localMessage]);
     try {
       const historyToken = chatHistoryTokenRef.current;
-      const savedMessage = historyToken && roomId
-        ? await persistChatMessage(roomId, historyToken, message.id, message.text)
-        : { ...message, type: "message" as const, senderIdentity: room.localParticipant.identity, senderName: "Vos" };
+      if (historyToken && roomId) {
+        await persistChatMessage(roomId, historyToken, message.id, message.text);
+      }
       await publishLiveKitChat(room, message);
-      setChatMessages((current) => [
-        ...current,
-        { ...savedMessage, senderName: "Vos" },
-      ]);
       setChatError(null);
     } catch {
+      setChatMessages((current) => current.filter((item) => item.id !== message.id));
       setChatError("No se pudo enviar el mensaje. Intentá nuevamente.");
     }
   }, [roomId]);
 
-  const addBoardItem = useCallback(async (type: BoardItem["type"], content: string) => {
+  const addBoardItem = useCallback(async (type: BoardItem["type"], content: string, position?: Pick<BoardItem, "x" | "y"> & Partial<Pick<BoardItem, "sourceId" | "targetId" | "targetX" | "targetY" | "width" | "height">>) => {
     const room = roomRef.current;
     const value = content.trim();
     if (!room || !value) return;
-    const item: BoardItem = { id: crypto.randomUUID(), type, content: value, x: 12 + (Math.random() * 45), y: 12 + (Math.random() * 40) };
+    const item: BoardItem = {
+      id: crypto.randomUUID(),
+      type,
+      content: value,
+      x: position ? Math.max(0, Math.min(88, position.x)) : 12 + (Math.random() * 45),
+      y: position ? Math.max(0, Math.min(84, position.y)) : 12 + (Math.random() * 40),
+      ...(position?.width ? { width: position.width } : {}),
+      ...(position?.height ? { height: position.height } : {}),
+      ...(position?.targetId ? { targetId: position.targetId } : {}),
+      ...(position?.sourceId ? { sourceId: position.sourceId } : {}),
+      ...(typeof position?.targetX === "number" ? { targetX: position.targetX } : {}),
+      ...(typeof position?.targetY === "number" ? { targetY: position.targetY } : {}),
+    };
+    setBoardVisible(true);
+    if (roomId && chatHistoryTokenRef.current) await persistBoardItem(roomId, chatHistoryTokenRef.current, item);
     await publishLiveKitBoard(room, { action: "add", item });
     setBoardItems((current) => [...current, item]);
   }, []);
@@ -439,15 +472,48 @@ export function useLiveKitConnection(
     const item = boardItems.find((candidate) => candidate.id === id);
     if (!room || !item) return;
     const moved = { ...item, x: Math.max(0, Math.min(88, x)), y: Math.max(0, Math.min(84, y)) };
+    setBoardVisible(true);
     setBoardItems((current) => current.map((candidate) => candidate.id === id ? moved : candidate));
+    if (roomId && chatHistoryTokenRef.current) await persistBoardItem(roomId, chatHistoryTokenRef.current, moved);
     await publishLiveKitBoard(room, { action: "move", item: moved });
   }, [boardItems]);
 
-  const uploadBoardImageFile = useCallback(async (file: File) => {
+  const resizeBoardItem = useCallback(async (id: string, width: number, height: number) => {
+    const room = roomRef.current;
+    const item = boardItems.find((candidate) => candidate.id === id);
+    if (!room || !item) return;
+    const resized = { ...item, width, height };
+    setBoardItems((current) => current.map((candidate) => candidate.id === id ? resized : candidate));
+    if (roomId && chatHistoryTokenRef.current) await persistBoardItem(roomId, chatHistoryTokenRef.current, resized);
+    await publishLiveKitBoard(room, { action: "move", item: resized });
+  }, [boardItems]);
+
+  const removeBoardItem = useCallback(async (id: string) => {
+    const room = roomRef.current;
+    const item = boardItems.find((candidate) => candidate.id === id);
+    if (!room || !item) return;
+    setBoardItems((current) => current.filter((candidate) => candidate.id !== id));
+    try {
+      if (roomId && chatHistoryTokenRef.current) await persistDeletedBoardItem(roomId, chatHistoryTokenRef.current, id);
+      await publishLiveKitBoard(room, { action: "remove", item });
+    } catch {
+      setBoardItems((current) => current.some((candidate) => candidate.id === id) ? current : [...current, item]);
+    }
+  }, [boardItems]);
+
+  const uploadBoardImageFile = useCallback(async (file: File, position?: Pick<BoardItem, "x" | "y">) => {
     if (!roomId || !chatHistoryTokenRef.current) throw new Error("El pizarrÃ³n todavÃ­a no estÃ¡ disponible.");
     const url = await uploadBoardImage(roomId, chatHistoryTokenRef.current, file);
-    await addBoardItem("image", url);
+    await addBoardItem(file.type.startsWith("video/") ? "video" : "image", url, position);
   }, [addBoardItem, roomId]);
+
+  const openBoard = useCallback(async () => {
+    const room = roomRef.current;
+    setBoardVisible(true);
+    if (room) await publishLiveKitBoard(room, { action: "activate" });
+  }, []);
+
+  const hideBoard = useCallback(() => setBoardVisible(false), []);
 
   if (!roomId) {
     return {
@@ -468,7 +534,12 @@ export function useLiveKitConnection(
       boardItems: [],
       addBoardItem,
       moveBoardItem,
+      resizeBoardItem,
+      removeBoardItem,
       uploadBoardImage: uploadBoardImageFile,
+      boardVisible: false,
+      openBoard,
+      hideBoard,
       setTrackEnabled,
       replaceTrack,
     };
@@ -492,7 +563,12 @@ export function useLiveKitConnection(
       boardItems: [],
       addBoardItem,
       moveBoardItem,
+      resizeBoardItem,
+      removeBoardItem,
       uploadBoardImage: uploadBoardImageFile,
+      boardVisible: false,
+      openBoard,
+      hideBoard,
       setTrackEnabled,
       replaceTrack,
     };
@@ -515,7 +591,12 @@ export function useLiveKitConnection(
     boardItems,
     addBoardItem,
     moveBoardItem,
+    resizeBoardItem,
+    removeBoardItem,
     uploadBoardImage: uploadBoardImageFile,
+    boardVisible,
+    openBoard,
+    hideBoard,
     setTrackEnabled,
     replaceTrack,
   };
