@@ -40,10 +40,10 @@ app.use(
   }),
 );
 
-const BOARD_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const BOARD_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "video/mp4", "video/webm", "video/ogg"]);
 
 // Debe registrarse antes del parser JSON global para recibir archivos binarios.
-app.post("/rooms/:roomId/board/assets", rateLimit(20, 60 * 1000), express.raw({ type: "image/*", limit: "8mb" }), async (req, res) => {
+app.post("/rooms/:roomId/board/assets", rateLimit(20, 60 * 1000), express.raw({ type: ["image/*", "video/*"], limit: "32mb" }), async (req, res) => {
   const roomId = req.params.roomId;
   if (!roomId || !isValidRoomId(roomId)) return res.status(400).json({ error: "ID de sala invÃ¡lido" });
   if (!verifyChatSessionToken(req.header("authorization")?.replace(/^Bearer /, ""), roomId)) {
@@ -51,7 +51,7 @@ app.post("/rooms/:roomId/board/assets", rateLimit(20, 60 * 1000), express.raw({ 
   }
   const mimeType = req.header("content-type")?.split(";")[0]?.toLowerCase();
   if (!mimeType || !BOARD_IMAGE_TYPES.has(mimeType) || !Buffer.isBuffer(req.body) || req.body.length === 0) {
-    return res.status(400).json({ error: "Solo se admiten imÃ¡genes JPG, PNG, WebP o GIF de hasta 8 MB" });
+    return res.status(400).json({ error: "Solo se admiten fotos JPG, PNG, WebP, GIF o videos MP4, WebM, OGG de hasta 32 MB" });
   }
   try {
     res.status(201).json({ url: await saveBoardImage(roomId, randomUUID(), mimeType, req.body) });
@@ -78,17 +78,23 @@ app.post("/rooms", rateLimit(10, 60 * 60 * 1000), async (_req: Request, res: Res
     return;
   }
 
-  const room = createRoom();
+  let room;
+  try {
+    room = await createRoom();
+  } catch {
+    res.status(503).json({ error: "No se pudo guardar la sala" });
+    return;
+  }
   try {
     await liveKitRoomService.createRoom({ name: room.id, maxParticipants: MAX_ROOM_PARTICIPANTS });
     res.status(201).json({ roomId: room.id, maxParticipants: MAX_ROOM_PARTICIPANTS });
   } catch {
-    deleteRoom(room.id);
+    await deleteRoom(room.id);
     res.status(502).json({ error: "No se pudo configurar la sala en LiveKit" });
   }
 });
 
-app.get("/rooms/:roomId", (req: Request, res: Response) => {
+app.get("/rooms/:roomId", async (req: Request, res: Response) => {
   const { roomId } = req.params;
 
   if (!roomId || !isValidRoomId(roomId)) {
@@ -96,7 +102,7 @@ app.get("/rooms/:roomId", (req: Request, res: Response) => {
     return;
   }
 
-  const room = getRoom(roomId);
+  const room = await getRoom(roomId);
   if (!room) {
     res.status(404).json({ exists: false });
     return;
@@ -125,7 +131,7 @@ app.post("/livekit/token", rateLimit(30, 10 * 60 * 1000), async (req: Request, r
     res.status(400).json({ error: "Sala o nombre inválido" });
     return;
   }
-  if (!getRoom(roomId)) {
+  if (!await getRoom(roomId)) {
     res.status(404).json({ error: "Sala no encontrada" });
     return;
   }
@@ -251,9 +257,9 @@ function canControlRecording(req: Request, roomId: string): boolean {
   return verifyRecordingControlToken(getBearerToken(req), roomId);
 }
 
-function validateRecordingRequest(req: Request, res: Response): string | null {
+async function validateRecordingRequest(req: Request, res: Response): Promise<string | null> {
   const roomId = req.params.roomId;
-  if (!roomId || !isValidRoomId(roomId) || !getRoom(roomId)) {
+  if (!roomId || !isValidRoomId(roomId) || !await getRoom(roomId)) {
     res.status(404).json({ error: "Sala no encontrada" });
     return null;
   }
@@ -268,14 +274,14 @@ function validateRecordingRequest(req: Request, res: Response): string | null {
   return roomId;
 }
 
-app.get("/rooms/:roomId/recording", rateLimit(30, 60 * 1000), (req: Request, res: Response) => {
-  const roomId = validateRecordingRequest(req, res);
+app.get("/rooms/:roomId/recording", rateLimit(30, 60 * 1000), async (req: Request, res: Response) => {
+  const roomId = await validateRecordingRequest(req, res);
   if (!roomId) return;
   res.json(getRecordingStatus(roomId));
 });
 
 app.post("/rooms/:roomId/recording/start", rateLimit(10, 60 * 1000), async (req: Request, res: Response) => {
-  const roomId = validateRecordingRequest(req, res);
+  const roomId = await validateRecordingRequest(req, res);
   if (!roomId) return;
   try {
     res.status(201).json(await startRecording(roomId));
@@ -285,7 +291,7 @@ app.post("/rooms/:roomId/recording/start", rateLimit(10, 60 * 1000), async (req:
 });
 
 app.post("/rooms/:roomId/recording/stop", rateLimit(10, 60 * 1000), async (req: Request, res: Response) => {
-  const roomId = validateRecordingRequest(req, res);
+  const roomId = await validateRecordingRequest(req, res);
   if (!roomId) return;
   try {
     res.json(await stopRecording(roomId));
